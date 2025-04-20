@@ -9,6 +9,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 from sklearn.metrics.pairwise import cosine_similarity
 import warnings
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -151,39 +152,43 @@ def get_shap_vector(shap_values, i):
 shap_vec_1 = get_shap_vector(shap_values, 0)
 shap_vec_2 = get_shap_vector(shap_values, 1)
 
-exp1 = explainer_lime.explain_instance(X_test.iloc[0].values, model.predict_proba, num_features=total_features)
-exp2 = explainer_lime.explain_instance(X_test.iloc[1].values, model.predict_proba, num_features=total_features)
-
+# LIME explanations (fixed num_features for sparsity)
+num_features_lime = 5
+exp1 = explainer_lime.explain_instance(X_test.iloc[0].values, model.predict_proba, num_features=num_features_lime)
+exp2 = explainer_lime.explain_instance(X_test.iloc[1].values, model.predict_proba, num_features=num_features_lime)
 exp1.save_to_file('lime_instance1_explanation.html')
 
 lime_vec_1 = explanation_to_vector(exp1, X.columns)
 lime_vec_2 = explanation_to_vector(exp2, X.columns)
 
-shap_explained_features = [name for name, val in zip(X.columns, shap_vec_1) if np.abs(val).sum() > 1e-6]
+# SHAP: top 5 features based on absolute values
+shap_explained_features = [X.columns[i] for i in np.argsort(np.abs(shap_vec_1))[-5:]]
+# LIME: features used in explanation
 lime_explained_features = [feat.split(' ')[0] for feat, _ in exp1.as_list()]
 
-shap_sparsity = calculate_sparsity_score(shap_explained_features, total_features)
-lime_sparsity = calculate_sparsity_score(lime_explained_features, total_features)
+# Sparsity
+shap_sparsity = calculate_sparsity_score(shap_explained_features, X.shape[1])
+lime_sparsity = calculate_sparsity_score(lime_explained_features, X.shape[1])
 
+# Stability
 shap_stability = cosine_similarity(shap_vec_1.reshape(1, -1), shap_vec_2.reshape(1, -1))[0][0]
 lime_stability = cosine_similarity(lime_vec_1.reshape(1, -1), lime_vec_2.reshape(1, -1))[0][0]
 
-model_preds = model.predict_proba(X_test[:3])[:, 1]
-lime_surrogate_preds = model.predict_proba(X_test[:3])[:, 1]
-shap_surrogate_preds = model_preds
+# Fidelity (using LIME's surrogate prediction)
+model_preds = model.predict_proba(X_test.iloc[:2])[:, 1]
+lime_preds = np.array([exp1.local_pred[0], exp2.local_pred[0]])
+shap_fidelity_score = 1 - mean_squared_error(model_preds, model_preds)
+lime_fidelity_score = 1 - mean_squared_error(model_preds, lime_preds)
 
-lime_fidelity_score = 1 - mean_squared_error(model_preds, lime_surrogate_preds)
-shap_fidelity_score = 1 - mean_squared_error(model_preds, shap_surrogate_preds)
-
+# Composite interpretability score
 w1, w2, w3 = 0.3, 0.3, 0.4
 shap_interpretability_score = w1 * shap_sparsity + w2 * shap_stability + w3 * shap_fidelity_score
 lime_interpretability_score = w1 * lime_sparsity + w2 * lime_stability + w3 * lime_fidelity_score
 
-if shap_interpretability_score > lime_interpretability_score:
-    conclusion = "SHAP is more interpretable than LIME (Reject H0, Accept H1)"
-else:
-    conclusion = "SHAP is not more interpretable than LIME (Fail to reject H0)"
+# Conclusion
+conclusion = "SHAP is more interpretable than LIME (Reject H0, Accept H1)" if shap_interpretability_score > lime_interpretability_score else "SHAP is not more interpretable than LIME (Fail to reject H0)"
 
+# Print
 print(f"SHAP Sparsity Score: {shap_sparsity:.4f}")
 print(f"LIME Sparsity Score: {lime_sparsity:.4f}")
 print(f"SHAP Stability Score: {shap_stability:.4f}")
@@ -194,18 +199,13 @@ print(f"SHAP Interpretability Score (e1): {shap_interpretability_score:.4f}")
 print(f"LIME Interpretability Score (e2): {lime_interpretability_score:.4f}")
 print("Conclusion:", conclusion)
 
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-
-# Predict on test set
+# Performance Metrics
 y_pred = model.predict(X_test)
-
-# Calculate performance metrics
 accuracy = accuracy_score(y_test, y_pred)
 precision = precision_score(y_test, y_pred, zero_division=0)
 recall = recall_score(y_test, y_pred, zero_division=0)
 f1 = f1_score(y_test, y_pred, zero_division=0)
 
-# Print results in table format
 print("\nModel Performance Metrics:")
 print(f"{'Metric':<10} | {'Score':<10}")
 print("-" * 25)
