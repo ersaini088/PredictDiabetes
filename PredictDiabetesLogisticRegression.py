@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
 from collections import defaultdict
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 # Optional: suppress feature name warnings
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -149,14 +150,6 @@ def get_shap_vector(shap_values, i):
         return vals[1]
     return vals
 
-shap_vec_1 = get_shap_vector(shap_values, 0)
-shap_vec_2 = get_shap_vector(shap_values, 1)
-
-exp1 = explainer_lime.explain_instance(X_test_scaled[0], model.predict_proba, num_features=total_features)
-exp2 = explainer_lime.explain_instance(X_test_scaled[1], model.predict_proba, num_features=total_features)
-
-exp1.save_to_file('lime_instance1_explanation.html')
-
 def explanation_to_vector(explanation, feature_names):
     vec = np.zeros(len(feature_names))
     for feat, weight in explanation.as_list():
@@ -166,37 +159,50 @@ def explanation_to_vector(explanation, feature_names):
             vec[idx] = abs(weight)
     return vec
 
-lime_vec_1 = explanation_to_vector(exp1, X.columns)
-lime_vec_2 = explanation_to_vector(exp2, X.columns)
-
-shap_explained_features = [name for name, val in zip(X.columns, shap_vec_1) if np.abs(val).sum() > 1e-6]
-lime_explained_features = [feat.split(' ')[0] for feat, _ in exp1.as_list()]
-
 def calculate_sparsity_score(explanation_features, total_features):
     return 1 - (len(explanation_features) / total_features)
 
+# Vector extraction
+shap_vec_1 = get_shap_vector(shap_values, 0)
+shap_vec_2 = get_shap_vector(shap_values, 1)
+
+# Use fewer features for LIME sparsity
+num_features_lime = 5
+exp1 = explainer_lime.explain_instance(X_test_scaled[0], model.predict_proba, num_features=num_features_lime)
+exp2 = explainer_lime.explain_instance(X_test_scaled[1], model.predict_proba, num_features=num_features_lime)
+exp1.save_to_file('lime_instance1_explanation.html')
+
+lime_vec_1 = explanation_to_vector(exp1, X.columns)
+lime_vec_2 = explanation_to_vector(exp2, X.columns)
+
+# SHAP: top 5 features
+shap_explained_features = [X.columns[i] for i in np.argsort(np.abs(shap_vec_1))[-5:]]
+# LIME: interpreted features
+lime_explained_features = [feat.split(' ')[0] for feat, _ in exp1.as_list()]
+
+# Sparsity
 shap_sparsity = calculate_sparsity_score(shap_explained_features, total_features)
 lime_sparsity = calculate_sparsity_score(lime_explained_features, total_features)
 
+# Stability
 shap_stability = cosine_similarity(shap_vec_1.reshape(1, -1), shap_vec_2.reshape(1, -1))[0][0]
 lime_stability = cosine_similarity(lime_vec_1.reshape(1, -1), lime_vec_2.reshape(1, -1))[0][0]
 
-model_preds = model.predict_proba(X_test_scaled[:3])[:, 1]
-lime_surrogate_preds = model.predict_proba(X_test_scaled[:3])[:, 1]
-shap_surrogate_preds = model_preds
+# Fidelity: fix using exp.local_pred[0]
+model_preds = model.predict_proba(X_test_scaled[:2])[:, 1]
+lime_preds = np.array([exp1.local_pred[0], exp2.local_pred[0]])
+shap_fidelity_score = 1 - mean_squared_error(model_preds, model_preds)
+lime_fidelity_score = 1 - mean_squared_error(model_preds, lime_preds)
 
-lime_fidelity_score = 1 - mean_squared_error(model_preds, lime_surrogate_preds)
-shap_fidelity_score = 1 - mean_squared_error(model_preds, shap_surrogate_preds)
-
+# Composite Interpretability Score
 w1, w2, w3 = 0.3, 0.3, 0.4
 shap_interpretability_score = w1 * shap_sparsity + w2 * shap_stability + w3 * shap_fidelity_score
 lime_interpretability_score = w1 * lime_sparsity + w2 * lime_stability + w3 * lime_fidelity_score
 
-if shap_interpretability_score > lime_interpretability_score:
-    conclusion = "SHAP is more interpretable than LIME (Reject H0, Accept H1)"
-else:
-    conclusion = "SHAP is not more interpretable than LIME (Fail to reject H0)"
+# Conclusion
+conclusion = "SHAP is more interpretable than LIME (Reject H0, Accept H1)" if shap_interpretability_score > lime_interpretability_score else "SHAP is not more interpretable than LIME (Fail to reject H0)"
 
+# Output
 print(f"\nSHAP Sparsity Score: {shap_sparsity:.4f}")
 print(f"LIME Sparsity Score: {lime_sparsity:.4f}")
 print(f"SHAP Stability Score: {shap_stability:.4f}")
@@ -206,8 +212,6 @@ print(f"LIME Fidelity Score: {lime_fidelity_score:.4f}")
 print(f"SHAP Interpretability Score (e1): {shap_interpretability_score:.4f}")
 print(f"LIME Interpretability Score (e2): {lime_interpretability_score:.4f}")
 print("Conclusion:", conclusion)
-
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 # Predict on test set
 y_pred = model.predict(X_test_scaled)
