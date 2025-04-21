@@ -16,7 +16,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 warnings.filterwarnings("ignore", category=UserWarning)
 
 # Load the dataset
-df = pd.read_csv("D:\\work\\MSCS\\CSC-703\\Project\\ModelCode\\diabetes-dataset.csv")
+df = pd.read_csv("diabetes-dataset.csv")
 
 # Split into features and target
 X = df.drop('Outcome', axis=1)
